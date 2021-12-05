@@ -1,0 +1,197 @@
+---
+title: "2021 MA678 Midterm Project"
+subtitle:"The analysis of google playstore App"
+author:
+  - Yanbing Chen
+  - BUID:U32747296
+date: "2021/12/5"
+linestretch: 1.5
+fontsize: 11pt
+geometry: margin=2.5cm
+output: 
+   pdf_document:
+     template: NULL
+     latex_engine:xelatex
+header-includes:
+  - \usepackage{fontspec}
+  - \setmainfont{Times New Roman}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message = TRUE,
+                      warning = FALSE)
+library(readr)
+library(ggplot2)
+library(tidyverse)
+library(rstanarm)
+library(gridExtra)
+library(knitr)
+library(magrittr)
+library(tidytext)
+library(dplyr)
+library(lme4)
+library(lmerTest)
+library(lattice)
+library(ggpubr)
+library(psych)
+data("stop_words")
+google_playstore <- read.csv("googleplaystore.csv",header = T) #### read data
+```
+
+
+## Abstract
+
+
+
+## Introduction
+Google play store is a digital application platform operated and developed by Google, and is also a digital media store that runs Android devices. Android users can download a variety of software, such as books, games, movies, music and other apps on the Google play store to achieve a variety of needs. When users search for Apps on the Google play store, the platform displays a variety of content related to these Apps, including software prices, software ratings, downloads, reviews, etc., which will provide an effective reference for users to select software. Due to several factors that can make influence on customers choice, I explore some relationships between them, and find out which factors can exert effect on Apps' price and how can these make influence on Apps' price based on the data I gain. In addition, I use multilevel model to do analysis about Apps' price and it's factors in this report because there are so many kinds of Apps in the Google play store.
+
+
+\newpage
+## Method
+# Data Cleaning and Processing
+
+The data is published on Kaggle:Google Play Store Apps and it's pulisher scraped these data of 10k Play Store apps in order to analyse the Android market. After downloading the data, I did the following steps to clean up and process the data.
+
+There are 13 columns in the data, therefore, it is important to find out the meaning of each column in the first step. After understanding the meaning of each column, I deleted some column that would not be used. Secondly, I deleted some NA values and outliers to avoid negative results in future analysis. Thirdly, I handled some special symbols in the columns and transfer, consider doing log transaction and standardized processing to these factors.
+
+Finally, I gained clean data containing 8 columns and 9367 observations. The explanation of 8 columns is shown in the following table 1.
+
+
+Table 1: The explanation of columns
+| column names      | explanation |
+| :--:              | :----- |
+| Category          | The kind to which each app belongs |
+| Rating            | The grade given by someone who have downloaded and used the App|
+| Reviews           | The number of times a user has access to each app |
+| Size              | The amount of stored data required to download the app |
+| Installs          | The number of installations per app |
+| Type              | The payment way of Apps: Free or Paid|
+| Price             | Money spent by customers to download an App |
+| Content.Rating    |  |
+
+
+```{r echo = FALSE}
+## delet NA
+google_playstore_na <- na.omit(google_playstore)
+
+## delete some columns that would not be used
+google_playstore_na_no <- google_playstore_na[,-c(1,9,10,11,12,13)]
+google_playstore_na_no_outlier <- google_playstore_na_no[!rownames(google_playstore_na_no) %in% c("10473"),]
+
+## address some special character in the columns
+google_playstore_na_no_outlier$Price <- gsub('[$]','',google_playstore_na_no_outlier$Price)
+google_playstore_na_no_outlier$Size <- gsub('[M]','',google_playstore_na_no_outlier$Size)
+google_playstore_na_no_outlier$Installs <-gsub('[,]','',google_playstore_na_no_outlier$Installs)
+google_playstore_na_no_outlier$Installs <- gsub('[+]','',google_playstore_na_no_outlier$Installs)
+
+## change variable into numeric
+# summary(google_playstore_na_no)
+google_playstore_na_no_outlier$Rating <- as.numeric(google_playstore_na_no_outlier$Rating)
+google_playstore_na_no_outlier$Reviews <- as.numeric(google_playstore_na_no_outlier$Reviews)
+google_playstore_na_no_outlier$Size <- as.numeric(google_playstore_na_no_outlier$Size)
+google_playstore_na_no_outlier$Installs <- as.numeric(google_playstore_na_no_outlier$Installs)
+google_playstore_na_no_outlier$Price <- as.numeric(google_playstore_na_no_outlier$Price)
+```
+
+# Exploratory Data Analysis
+```{r,echo=FALSE}
+## contract predictors into log version
+google_playstore_na_no_outlier %<>% mutate(log_rating = log(Rating))
+google_playstore_na_no_outlier %<>% mutate(log_review = log(Reviews))
+google_playstore_na_no_outlier %<>% mutate(log_size = log(Size))
+google_playstore_na_no_outlier %<>% mutate(log_install = log(Installs))
+google_playstore_na_no_outlier %<>% mutate(log_price = log(Price)) # 0 become infinite
+
+google_playstore_na_no_outlier <- na.omit(google_playstore_na_no_outlier)
+
+## Standardize processing(Rating,Size,Install)
+google_playstore_na_no_outlier %<>% mutate(s_review = (Reviews - mean(Reviews))/sd(Reviews))
+#ggplot(google_playstore_na_no,aes(x = s_review))+geom_histogram()
+google_playstore_na_no_outlier %<>% mutate(s_rating = (Rating - mean(Rating))/sd(Rating))
+google_playstore_na_no_outlier %<>% mutate(s_size = (Size - mean(Size))/sd(Size))
+google_playstore_na_no_outlier %<>% mutate(s_install = (Installs - mean(Installs))/sd(Installs))
+
+google <- google_playstore_na_no_outlier
+```
+
+
+# correlation between price and rating
+```{r}
+rating <- ggplot(google,aes(x = log_rating, y = log_price))+
+  geom_point(aes(color = Category),alpha = 0.3)+
+  labs(x = 'log(number of rating)', y = 'log(number of price)', title = 'Number of Rating vs Number of Price')+
+  theme(plot.title = element_text(hjust = 0.5))+
+  geom_smooth(aes(color = Category),method = "lm",se = F)+
+  facet_grid(~Type)
+```
+#+解释
+
+# correlation between price and review
+```{r}
+review <- ggplot(google,aes(x = log_review, y = log_price))+
+  geom_point(aes(color = Category),alpha = 0.3)+
+  labs(x = 'log(number of Reviews)', y = 'log(number of price)', title = 'Number of Reviews vs Number of Price')+
+  theme(plot.title = element_text(hjust = 0.5))+
+  geom_smooth(aes(color = Category),method = "lm",se = F)+
+  facet_grid(~Type)
+```
+
+# correlation between price and size
+```{r}
+size <- ggplot(google,aes(x = log_size, y = log_price))+
+  geom_point(aes(color = Category),alpha = 0.3)+
+  labs(x = 'log(number of Size)', y = 'log(number of price)', title = 'Number of Size vs Number of Price')+
+  theme(plot.title = element_text(hjust = 0.5))+
+  geom_smooth(aes(color = Category),method = "lm",se = F)+
+  facet_grid(~Type)
+```
+
+# correlation between price and install
+```{r}
+install <- ggplot(google,aes(x = log_install, y = log_price))+
+  geom_point(aes(color = Category),alpha = 0.3)+
+  labs(x = 'log(number of Installs)', y = 'log(number of price)', title = 'Number of Installs vs Number of Price')+
+  theme(plot.title = element_text(hjust = 0.5))+
+  geom_smooth(aes(color = Category),method = "lm",se = F)+
+  facet_grid(~Type)
+```
+
+
+\newpage
+## Result
+
+# Model Fitting
+```{r}
+fit2 <- lmer(log_price~log_install+log_review+log_rating+(1+log_install|Category)+(1+log_size|Category)+(1+log_review|Category)+(1+log_rating|Category),data = google_Paid)
+summary(fit2)
+```
+
+# Model Validation
+```{r}
+re <- plot(fit2)
+qq <- qqmath(fit2)
+grid.arrange(re,qq,nrow=1)
+
+ggplot(data.frame(lev = hatvalues(fit2),pearson = residuals(fit2,type = "pearson")),
+       aes(x=lev, y=pearson))+
+  geom_point()+
+  geom_hline(yintercept = 0,color = "blue")
+```
+
+## Discussion
+
+
+\newpage
+
+## Appendix
+```{r}
+
+```
+
+## Supplement(code)
+```{r}
+
+```
+
