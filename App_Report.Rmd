@@ -1,0 +1,502 @@
+---
+title: "2021 MA678 Midterm Project"
+subtitle: "The analysis of google playstore App"
+author:
+  - Yanbing Chen
+  - BUID:U32747296
+date: "2021/12/11"
+linestretch: 1.5
+fontsize: 11pt
+geometry: margin=2.5cm
+output: 
+  pdf_document:
+    template: NULL
+    latex_engine: xelatex
+header-includes:
+  - \usepackage{fontspec}
+  - \setmainfont{Times New Roman}
+---
+
+```{r,echo=FALSE}
+knitr::opts_chunk$set(warning=F,message = F,echo=F,highlight=F)
+#knitr::opts_chunk$set(echo = TRUE,out.width="0.9\\linewidth",dev="png",fig.align  = 'center')
+knitr::opts_chunk$set(fig.width=6, fig.height=4,fig.align = "center") 
+pacman::p_load(
+  readr,
+  tidytext,
+  rstanarm,
+  gridExtra,
+  knitr,
+  dplyr,
+  stringr,
+  tidyverse,
+  tidyr,
+  magrittr,
+  lme4,
+  lmerTest,
+  ggpubr,
+  lattice,
+  scales,
+  reshape2,
+  ggplot2,
+  psych,
+  tinytex,
+  latexpdf,
+  sjPlot,
+  sjmisc)
+data("stop_words")
+google_playstore <- read.csv("googleplaystore.csv",header = T) #### read data
+```
+
+
+## Abstract
+This report aims to find the relationship between App price and App review, rating, size and installs. I use multilevel model to analyze whether installs, review, rating and size would influence Google play store App price, and I plotted a varying intercept figure. The results are that rating, installs are all have negative influence on price, and size presents a positive impact on price only in Medical category. The result demonstrates that maybe there are other more important factors affect price. Therefore, I consider add more addiction factors to model in future analysis.
+
+## Introduction
+Google play store is a digital application platform operated and developed by Google, and it is also a digital media store that runs Android devices. Android users can download a variety of software, such as books, games, movies, music and other apps on the Google play store to achieve a variety of needs. When users search for Apps on the Google play store, the platform displays a variety of content related to these Apps, including software prices, software ratings, downloads, reviews, etc., which will provide an effective reference for users to select software. Due to several factors that can make influence on customers choice, I explore some relationships among them, and find out which factors can exert effect on Apps' price and how can these make influence on App price based on the data I gain. In addition, I use multilevel model to do analysis about App price and it's factors in this report because there are so many kinds of App in the Google play store.
+
+
+## Method
+### Data Cleaning and Processing
+
+The data is published on Kaggle: Google play store Apps, and it's publisher scraped these data of 10k Play Store apps in order to analyze the Android market. After downloading the data, I did the following steps to clean up and process the data.
+
+There are 13 columns in the data, therefore, it is important to find out the meaning of each column in the first step. After understanding the meaning of each column, I deleted some column that would not be used. Secondly, I deleted some NA values and outliers to avoid negative results in future analysis. Thirdly, I handled some special symbols in the columns , consider doing log transaction and standardized processing to these factors.
+
+Finally, I gained clean data containing 8 columns and 9367 observations. The explanation of 8 columns is shown in the following table 1.
+
+
+```{r}
+Column_names <- c('Category','Rating','Reviews','Size','Installs','Type',
+        'Type')
+Explanation <- c('The kind to which each app belongs',
+        'The grade given by someone who have downloaded and used the App',
+        'The number of times a user has access to each app',
+        'The amount of stored data required to download the app ',
+        'The number of installations per app',
+        'The payment way of Apps: Free or Paid',
+        'Money spent by customers to download an App')
+des_tab<-cbind(Column_names,Explanation)
+knitr::kable(des_tab, "pipe")
+```
+
+
+```{r echo = FALSE}
+## delete NA
+google_playstore_na <- na.omit(google_playstore)
+
+## delete some columns that would not be used
+google_playstore_na_no <- google_playstore_na[,-c(1,9,10,11,12,13)]
+google_playstore_na_no_outlier <- google_playstore_na_no[!rownames(google_playstore_na_no) %in% c("10473"),]
+
+## address some special character in the columns
+google_playstore_na_no_outlier$Price <- gsub('[$]','',google_playstore_na_no_outlier$Price)
+google_playstore_na_no_outlier$Size <- gsub('[M]','',google_playstore_na_no_outlier$Size)
+google_playstore_na_no_outlier$Installs <-gsub('[,]','',google_playstore_na_no_outlier$Installs)
+google_playstore_na_no_outlier$Installs <- gsub('[+]','',google_playstore_na_no_outlier$Installs)
+
+## change variable into numeric
+# summary(google_playstore_na_no)
+google_playstore_na_no_outlier$Rating <- as.numeric(google_playstore_na_no_outlier$Rating)
+google_playstore_na_no_outlier$Reviews <- as.numeric(google_playstore_na_no_outlier$Reviews)
+google_playstore_na_no_outlier$Size <- as.numeric(google_playstore_na_no_outlier$Size)
+google_playstore_na_no_outlier$Installs <- as.numeric(google_playstore_na_no_outlier$Installs)
+google_playstore_na_no_outlier$Price <- as.numeric(google_playstore_na_no_outlier$Price)
+```
+
+
+## Exploratory Data Analysis
+```{r echo=FALSE}
+## contract predictors into log version
+google_playstore_na_no_outlier %<>% mutate(log_rating = log(Rating))
+google_playstore_na_no_outlier %<>% mutate(log_review = log(Reviews))
+google_playstore_na_no_outlier %<>% mutate(log_size = log(Size))
+google_playstore_na_no_outlier %<>% mutate(log_install = log(Installs))
+google_playstore_na_no_outlier %<>% mutate(log_price = log(Price)) # 0 become infinite
+
+google_playstore_na_no_outlier <- na.omit(google_playstore_na_no_outlier)
+
+## Standardize processing(Rating,Size,Install)
+google_playstore_na_no_outlier %<>% mutate(s_review = (Reviews - mean(Reviews))/sd(Reviews))
+#ggplot(google_playstore_na_no,aes(x = s_review))+geom_histogram()
+google_playstore_na_no_outlier %<>% mutate(s_rating = (Rating - mean(Rating))/sd(Rating))
+google_playstore_na_no_outlier %<>% mutate(s_size = (Size - mean(Size))/sd(Size))
+google_playstore_na_no_outlier %<>% mutate(s_install = (Installs - mean(Installs))/sd(Installs))
+google <- filter(google_playstore_na_no_outlier,log_rating > 0,log_review > 0,log_size > 0,log_install > 0)
+google <-na.omit(google)
+
+google_Paid<-filter(google,Type == "Paid")
+```
+
+
+In this data, there are many variables, such as 'Installs','Size', which range are so large that need us to make some transaction before doing exploratory analysis and model fitting. Therefore, in order to get some figures that are easier to understand and make the model fit better, I take log of these variables and do scatter plots to explore the relationship between these variables and price.
+
+
+```{r fig.cap=" Reviews vs Price"}
+ggplot(google,aes(x = log_review, y = log_price))+
+  geom_point(aes(color = Category),alpha = 0.3)+
+  labs(x = 'log(number of Reviews)', y = 'log(number of price)', title = 'Reviews vs Price')+
+  theme(plot.title = element_text(hjust = 0.5))+
+  geom_smooth(aes(color = Category),method = "lm",se = F)+
+  facet_grid(~Type)
+```
+Figure 1 still shows the correlation between price and reviews. Prices and rating also differ in different categories. As can be seen from the graph, different categories have various intercepts and slopes. In one part of the category, price and rating present a positive correlation, while in the other part, a negative correlation is shown.
+
+```{r fig.cap="Rating vs Price"}
+# geom_smooth(aes(color = Category),method = "lm",se = F)+
+# correlation between price and rating
+ggplot(google,aes(x = log_rating, y = log_price))+
+  geom_point(aes(color = Category),alpha = 0.3)+
+  labs(x = 'log(number of rating)', y = 'log(number of price)', title = 'Rating vs  Price')+
+  theme(plot.title = element_text(hjust = 0.5))+
+  geom_smooth(aes(color = Category),method = "lm",se = F)+
+  facet_grid(~Type)
+```
+
+Figure 2 illustrates the correlation between rating and price. It is clear that price and rating show a negative relationship in most category. In addition, it can be read from the result that in `Free` type that no matter how the rating grows, the price of App are always under zero and does not change significantly.
+
+```{r fig.cap="Size vs Price"}
+ggplot(google,aes(x = log_size, y = log_price))+
+  geom_point(aes(color = Category),alpha = 0.3)+
+  labs(x = 'log(number of Size)', y = 'log(number of price)', title = 'Size vs Price')+
+  theme(plot.title = element_text(hjust = 0.5))+
+  geom_smooth(aes(color = Category),method = "lm",se = F)+
+  facet_grid(~Type)
+```
+
+Figure 3 conveys an information which is similar with Figure 1 and 2 about 'Free' type. Besides, in 'Paid' type, different categories also have different intercepts and slopes.
+
+
+```{r fig.cap="Installs vs Price"}
+ggplot(google,aes(x = log_install, y = log_price))+
+  geom_point(aes(color = Category),alpha = 0.3)+
+  labs(x = 'log(number of Installs)', y = 'log(number of price)', title = 'Installs vs Price')+
+  theme(plot.title = element_text(hjust = 0.5))+
+  geom_smooth(aes(color = Category),method = "lm",se = F)+
+  facet_grid(~Type)
+```
+
+In Figure 4, dots in 'Paid' type look more concentrated, but it also shows that in different categories, the correlation between price and installs are different.
+
+Above all, from Figure 1 to Figure 2, it is obvious that although the values of each variable changes, the App prices in each category change slightly or even never change. Therefore, I'll choose type to fit data in type 'Paid', for making the results more meaningful in later analysis.
+
+
+\newpage
+## Method
+### Model Fitting
+There are many methods can be chosen to fit model. When combing the real situation that this data contains more than 33 categories, I consider using multilevel model to fit the data. In the data cleaning and processing part, I have took log transaction to some predictors and the price. Besides, from the EDA results, it is clear that different categories have different intercepts and slopes, so it is reasonable to apply multilevel model.
+
+In order to gain the best result, I tried many ways to fit the model, such as 'lmer', 'stan_lmer' and so on. Besides, trying to delete or add different variables in the model was also an important part during model fitting. After many attempts, the optimal model fitting method I selected is `stan_lmer`. I put the fitting results of some other models that I tried in the appendix. In five `stan_lmer` models that I tried to fit, the most efficient model is mod9, for its looic value is smaller. Here is the model function:
+
+```{r}
+google_Paid<-filter(google,Type == "Paid")
+google_Paid %>% filter(log_price>0,log_review>0,log_rating>0,log_install>0) -> google_Paid
+
+google_Paid %>% select(log_price,log_install,log_review,log_rating)<=0 ->tmp
+apply(tmp, 2, sum)
+
+mod9 <- stan_lmer(formula = log_price~log_install+log_review+log_size+log_rating+(1+log_size|Category),data = google_Paid)
+```
+
+I also plotted a binned residual plot to check model validation. In figure 5, it shows that most points fall inside the confidence bands and there is not a distinctive pattern to the residuals. Therefore, the model can be considered a relatively good fit based on the message from binned residual plot.
+
+```{r fig.cap="Binned residual plot"}
+arm::binnedplot(fitted(mod9),resid(mod9))
+```
+
+## Result
+### Model coefficient
+
+Due to there are many categories in this data, here just an example for Education category, and we can conclude this formula: 
+$$log(price)= -2.37 - 0.05\cdot log(install) + 0.07\cdot log(review) - 0.06\cdot log(size) - 0.41\cdot log(rating)$$
+From the coefficients result, it is clear that the parameters of three predictors are not totally large than 0, meaning that the impact of different predictors on price in each categories is not entirely positive. However,the coefficient in log_rating are all equal to -0.41.For example, in category `Education`, each 1% difference in review, the predicted difference in price is 7% when other variables do not change.
+
+```{r}
+saveRDS(mod9,"stanmodel.rds")
+lmer_mod9 <- readRDS("stanmodel.rds")
+
+sims <- as.matrix(lmer_mod9)
+
+para_name <- colnames(lmer_mod9)
+                      
+# coef(mod9)
+# mod9$coefficients
+# Obtain school-level varying intercept a_j
+# draws for overall mean
+mu_a_sims <- as.matrix(lmer_mod9, 
+                       pars = "(Intercept)")
+
+# draws for 73 schools' school-level error
+u_sims <- as.matrix(lmer_mod9, 
+                    regex_pars = "b\\[\\(Intercept\\) Category\\:")
+
+# draws for 73 schools' varying intercepts               
+a_sims <- as.numeric(mu_a_sims) + u_sims          
+
+# Obtain sigma_y and sigma_alpha^2
+# draws for sigma_y
+s_y_sims <- as.matrix(lmer_mod9, 
+                       pars = "sigma")
+# draws for sigma_alpha^2
+s__alpha_sims <- as.matrix(lmer_mod9, pars = "Sigma[Category:(Intercept),(Intercept)]")
+```
+
+```{r}
+# Compute mean, SD, median, and 95% credible interval of varying intercepts
+
+# Posterior mean and SD of each alpha
+a_mean <- apply(X = a_sims,     # posterior mean
+                MARGIN = 2,
+                FUN = mean)
+a_sd <- apply(X = a_sims,       # posterior SD
+              MARGIN = 2,
+              FUN = sd)
+
+# Posterior median and 95% credible interval
+a_quant <- apply(X = a_sims, 
+                 MARGIN = 2, 
+                 FUN = quantile, 
+                 probs = c(0.025, 0.50, 0.975))
+a_quant <- data.frame(t(a_quant))
+names(a_quant) <- c("Q2.5", "Q50", "Q97.5")
+
+# Combine summary statistics of posterior simulation draws
+a_df <- data.frame(a_mean, a_sd, a_quant)
+round(head(a_df), 2)
+```
+
+
+```{r}
+a_df <- a_df[order(a_df$a_mean), ]
+a_df$a_rank <- c(1 : dim(a_df)[1])  # a vector of school rank 
+
+a_df$row<-factor(rownames(a_df) ,levels=rownames(a_df))
+
+a_df<-a_df %>% separate(col=row,into=c('none','Category'),sep=':')
+a_df$Category<-str_extract(a_df$Category,'\\w*')
+
+a_df$Category<-factor(a_df$Category,levels =  a_df$Category) # order Category
+```
+
+```{r fig.cap="Varying Intercept figure"}
+# Plot school-level alphas's posterior mean and 95% credible interval
+ggplot(data = a_df, 
+       aes(x = factor(Category), 
+           y = a_mean)) +
+  geom_pointrange(aes(ymin = Q2.5, 
+                      ymax = Q97.5),
+                  position = position_jitter(width = 0.1, 
+                                             height = 0)) + 
+  geom_hline(yintercept = mean(a_df$a_mean), 
+             size = 0.5, 
+             col = "red") + 
+   scale_y_continuous(expression(paste("varying intercept ", n[j]))) + labs(x='Category')+
+  theme_bw( base_family = "serif")+
+    theme(axis.text.x = element_text(angle=90),plot.title = element_text(hjust = 0.5))
+
+```
+
+Figure 6 shows different intercept in different categories. The red line is the average intercept value in the data. In 33 categories, there are 11 categories' intercept under average line, and `Life Style` has the largest intercept. Besides, in these four predictors, only App review have positive influence on App price, and the rest three have negative impact on it except in `Medical`.
+
+
+## Discussion
+This report analyzes the variables in the Google play store that may have various effects on the price of Apps and their relationship to Apps price. According to the fitting results of the model, almost every predictor has negative effect on price in each category. Only in `Medical`, review shows a positive impact on App price.
+
+However, there are some limitations in this reports. Firstly, this report only taking some external factors that may affect the App itself into account, but ignoring some of the App internal characters, which are also affecting its price. For example, the cost of the app, functional requirements, the target group of App and so on. Therefore, in further analysis, I plan to add more predictors into the model so that I can gain better result. In addition, there are 33 categories in the data, and some categories have common characters, so the other important step that I will do is combine them into the same group to analyze. Secondly, in the EDA part, I plotted 4 pictures to find the relationship of each predictor and price. However, in model fitting part, I only consider one predictor, which is size, with price. It is no doubt that I need to fit more models to make correspondent to my EDA part.
+
+
+## Citation
+1.https://www.kaggle.com/lava18/google-play-store-apps.
+2.http://ritsokiguess.site/docs/2019/06/25/going-to-the-loo-using-stan-for-model-comparison/
+3.https://cran.r-project.org/web/packages/loo/vignettes/loo2-example.html
+4.https://stats.stackexchange.com/questions/99274/interpreting-a-binned-residual-plot-in-logistic-regression
+5.https://cran.r-project.org/web/packages/loo/vignettes/loo2-example.html
+6.https://mc-stan.org/users/documentation/case-studies/tutorial_rstanarm.html
+
+
+\newpage
+## Appendix
+### More EDA
+```{r fig.cap="Correlation between price and other variables"}
+# rating <- plot(google$Rating,google$Price,main="Correlation between price and rating")
+# review <- plot(google$Rating,google$Reviews,main="Correlation between price and review")
+# size <- plot(google$Rating,google$Size,main="Correlation between price and size")
+# install <- plot(google$Rating,google$Installs,main="Correlation between price and installs")
+# 
+# all <- ggarrange(rating,review,size,install,
+#                  nrow = 2,ncol = 2)
+```
+
+
+```{r fig.cap="Distribution of each predictor"}
+# price
+ggplot(google_playstore_na_no_outlier,aes(x = Price))+
+  geom_histogram()
+
+# rating
+p1<-ggplot(google_playstore_na_no_outlier,aes(x = Rating))+
+  geom_histogram()
+
+# review
+p3<-ggplot(google_playstore_na_no_outlier,aes(x = Reviews))+
+  geom_histogram()
+
+# size
+p5<-ggplot(google_playstore_na_no_outlier,aes(x = Size))+
+  geom_histogram()
+  
+# installs
+p7<-ggplot(google_playstore_na_no_outlier,aes(x = Installs))+
+  geom_histogram()
+
+## Standardize processing(Rating,Size,Install)
+google_playstore_na_no_outlier %<>% mutate(s_review = (Reviews - mean(Reviews))/sd(Reviews))
+#ggplot(google_playstore_na_no,aes(x = s_review))+geom_histogram()
+google_playstore_na_no_outlier %<>% mutate(s_rating = (Rating - mean(Rating))/sd(Rating))
+google_playstore_na_no_outlier %<>% mutate(s_size = (Size - mean(Size))/sd(Size))
+google_playstore_na_no_outlier %<>% mutate(s_install = (Installs - mean(Installs))/sd(Installs))
+
+p2<-ggplot(google_playstore_na_no_outlier,aes(x = s_rating))+
+  geom_histogram()
+
+p4<-ggplot(google_playstore_na_no_outlier,aes(x = s_review))+
+  geom_histogram()
+
+p6<-ggplot(google_playstore_na_no_outlier,aes(x = s_size))+
+  geom_histogram()
+
+p8<-ggplot(google_playstore_na_no_outlier,aes(x = s_install))+
+  geom_histogram()
+
+ggarrange(p1,p2,p3,p4,p5,p6,p7,p8,
+          row = 4, col = 2)
+# Conclusion: standardized processing is not required.
+```
+
+
+```{r fig.cap="Count numbers of each category"}
+google_category <- google %>%
+  group_by(Category) %>%summarise(n=n(),avg_price = mean(Price),avg_rating = mean(Rating),avg_review =mean(Reviews),avg_install = mean(Installs),avg_size = mean(Size))
+
+ggplot(google_category)+
+  geom_bar(aes(x=n,y=factor(Category),fill=Category),stat = "Identity")+
+  labs(x='Count number',y='Category of google play store apps',title='Count numbers of each Category')+
+  guides(fill=FALSE) # delete legend
+```
+
+### Model Selection
+try stan_lmer
+```{r}
+library(loo)
+google_Paid %>% filter(log_price>0,log_review>0,log_rating>0,log_install>0) -> google_Paid
+
+google_Paid %>% select(log_price,log_install,log_review,log_rating)<=0 ->tmp
+apply(tmp, 2, sum)
+
+mod5 <- stan_lmer(formula = log_price~log_install+log_review+(1+log_review|Category),data=google_Paid)
+loo5 <- loo(mod5)
+print(loo5)
+p_loo5<-plot(loo5)
+
+mod6 <- stan_lmer(formula = log_price~log_install+log_review+(1+log_install|Category),data=google_Paid)
+loo6 <- loo(mod6)
+print(loo6)
+p_loo6<-plot(loo6)
+
+mod7 <- stan_lmer(formula = log_price~log_install+log_review+log_size+log_rating+(1+log_install|Category),data = google_Paid)
+loo7 <- loo(mod7)
+print(loo7)
+p_loo7<-plot(loo7)
+
+mod8 <- stan_lmer(formula = log_price~log_install+log_review+log_size+log_rating+(1+log_review|Category),data = google_Paid)
+loo8 <- loo(mod8)
+print(loo8)
+p_loo8<-plot(loo8)
+
+mod9 <- stan_lmer(formula = log_price~log_install+log_review+log_size+log_rating+(1+log_size|Category),data = google_Paid)
+
+comp <- loo_compare(loo5,loo6,loo7,loo8,loo9)
+print(comp,simplify = FALSE, digits = 3)
+```
+
+
+```{r}
+## create data frame of model coefficients and standard errors
+# function to extract what we need
+ce = function(model.obj){
+  extract = summary(get(model.obj))$coefficients[,1:2]
+  return(data.frame(extract,vars=row.names(extract),model=model.obj))
+}
+# run function on the three models and bind into single data frame
+coefs = do.call(rbind,sapply(paste0("mod",1:4),ce,simplify = FALSE))
+
+names(coefs)[2] = "se"
+
+ggplot(coefs, aes(vars, Estimate)) + 
+  geom_hline(yintercept=0, lty=2, lwd=1, colour="grey50") +
+  geom_errorbar(aes(ymin=Estimate - se, ymax=Estimate + se, colour=vars), 
+                lwd=1, width=0) +
+  geom_point(size=3, aes(colour=vars)) +
+  facet_grid(. ~ model) +
+  coord_flip() +
+  guides(colour=FALSE) +
+  labs(x="Coefficient", y="Value") +
+  theme_grey(base_size=15)
+
+# google_Paid <- filter(google,Type=="Paid")
+# 
+# google_category <- google %>%
+#   group_by(Category) %>%summarise(n=n(),avg_price = mean(Price),avg_rating = mean(Rating),avg_review =mean(Reviews),avg_install = mean(Installs),avg_size = mean(Size))
+# 
+# google_category %<>% mutate (avg_n = mean(n))
+# google_category %<>% mutate (med_n = median(n))
+# 
+# google_n_lesmed <- filter(google_category,n <=167) # n < median
+# 
+# google_lesmed <- inner_join(google_Paid,google_n_lesmed,by = c("Category" = "Category"))
+# 
+# fit2 <- lmer(log_price~log_install+log_review+log_rating+(1+log_install|Category)+(1+log_review|Category)+(1+log_rating|Category),data = google_lesmed)
+# summary(fit2)
+# coef(fit2)
+```
+
+
+### Model Validation
+
+summary of model 9
+```{r}
+summary(mod9)
+```
+
+PSIS diagnostic
+```{r}
+loo9 <- loo(mod9)
+print(loo9)
+p_loo9<-plot(loo9)
+```
+
+pp check of model
+```{r}
+pp_check(mod9)
+```
+
+random effect plot
+```{r fig.cap="random effect plot"}
+plot_model(mod9)
+```
+
+model coefficient
+```{r}
+coef(mod9)
+```
+
+
+
+
+
+
+
+
+
+
+
